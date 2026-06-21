@@ -1661,68 +1661,48 @@ string Live(string id, const string &in path, dictionary &MetaData, array<dictio
 	}
 
 
+
+
 	status = 3;
-	res = post("https://api.live.bilibili.com/xlive/web-room/v1/playUrl/playUrl?cid=" + room_id + "&platform=web&qn=10000&https_url_req=1&ptype=16");
-	HostPrintUTF8("[Bili] V1 len=" + res.length());
-	if (Reader.parse(res, Root) && Root.isObject() && Root["code"].asInt() == 0) {
-		JsonValue durl = Root["data"]["durl"];
-		if (durl.isArray() && durl.size() > 0) {
-			string flv_url = durl[0]["url"].asString();
-			HostPrintUTF8("[Bili] FLV=" + flv_url.substr(0,150));
-			string stream_name = HostRegExpParse(flv_url, "(live_[^_]+_[^_]+)");
-			HostPrintUTF8("[Bili] stream=" + stream_name);
-			if (!stream_name.empty()) {
-				string gw_url = "https://api.live.bilibili.com/xlive/play-gateway/master/url?cid=" + room_id + "&mid=0&pt=web&p2p_type=1&net=0&free_type=0&build=0&feature=0&qn=10000&drm_type=0,1,2,3&cam_id=0";
-				HostPrintUTF8("[Bili] GW=" + gw_url);
-				string m3u8 = post(gw_url);
-				HostPrintUTF8("[Bili] m3u8 len=" + m3u8.length());
-				if (!m3u8.empty() && m3u8.find("#EXTM3U") >= 0) {
-					array<string> mlines = m3u8.split("\n");
-					HostPrintUTF8("[Bili] lines=" + mlines.length());
-					array<int> seen_qn;
-					for (uint i2 = 0; i2 < mlines.length(); i2++) {
-						if (mlines[i2].find("#EXT-X-STREAM-INF:") >= 0) {
-							int qn_val = parseInt(HostRegExpParse(mlines[i2], "BILI-QN=([0-9]+)"));
-							if (seen_qn.find(qn_val) >= 0) { continue; }
-							seen_qn.insertLast(qn_val);
-							string s_url = "";
-							for (uint j2 = i2+1; j2 < mlines.length(); j2++) {
-								string t = mlines[j2];
-								if (!t.empty() && t.find("#") != 0) { s_url = t; break; }
-							}
-							HostPrintUTF8("[Bili] qn=" + qn_val + " url=" + s_url.substr(0,80));
-							if (url.empty()) { url = s_url; }
-							if (@QualityList !is null && !s_url.empty()) {
-								dictionary qualityitem;
-								qualityitem["url"] = s_url;
-								string dn = HostRegExpParse(mlines[i2], "BILI-DISPLAY=\"([^\"]+)\"");
-								if (dn.empty()) { dn = "qn" + qn_val; }
-								qualityitem["quality"] = dn;
-								qualityitem["qualityDetail"] = qualityitem["quality"];
-								qualityitem["itag"] = i2;
-								QualityList.insertLast(qualityitem);
-							}
-						}
+	string v1 = post("https://api.live.bilibili.com/xlive/web-room/v1/playUrl/playUrl?cid=" + room_id + "&platform=web&qn=10000&https_url_req=1&ptype=16");
+	string flv_url = "";
+	{ JsonReader R; JsonValue V; if (R.parse(v1, V) && V.isObject() && V["code"].asInt() == 0) { JsonValue d = V["data"]["durl"]; if (d.isArray() && d.size() > 0) flv_url = d[0]["url"].asString(); } }
+	string stream_name = HostRegExpParse(flv_url, "(live_[^_]+_[^_]+)");
+	if (!stream_name.empty()) {
+		string gw = post("https://api.live.bilibili.com/xlive/play-gateway/master/url?cid=" + room_id + "&mid=0&pt=web&p2p_type=-1&net=0&free_type=0&build=0&feature=0&qn=10000&drm_type=0,1,2,3&cam_id=0");
+		if (!gw.empty() && gw.find("#EXTM3U") >= 0) {
+			array<string> mlines = gw.split("\n");
+			array<int> seen_qn;
+			for (uint i2 = 0; i2 < mlines.length(); i2++) {
+				if (mlines[i2].find("#EXT-X-STREAM-INF:") >= 0) {
+					int qn_val = parseInt(HostRegExpParse(mlines[i2], "BILI-QN=([0-9]+)"));
+					if (seen_qn.find(qn_val) >= 0) { continue; }
+					seen_qn.insertLast(qn_val);
+					string s_url = "";
+					for (uint j2 = i2+1; j2 < mlines.length(); j2++) {
+						string t = mlines[j2];
+						if (!t.empty() && t.find("#") != 0) { s_url = t; break; }
 					}
-				}
-				if (url.empty()) {
-					HostPrintUTF8("[Bili] HLS failed, use FLV");
-					url = flv_url;
+					string dn = HostRegExpParse(mlines[i2], "BILI-DISPLAY=\"([^\"]+)\"");
+					if (dn.empty()) { dn = "qn" + qn_val; }
+					if (url.empty()) { url = s_url; }
+					if (@QualityList !is null && !s_url.empty()) {
+						dictionary qitem; qitem["url"] = s_url; qitem["quality"] = dn;
+						qitem["qualityDetail"] = qitem["quality"]; qitem["itag"] = qn_val;
+						QualityList.insertLast(qitem);
+					}
 				}
 			}
 		}
 	}
-	if (url.empty()) { HostPrintUTF8("[Bili] All failed"); }
+	if (url.empty() && !flv_url.empty()) { url = flv_url; }
 	if (@QualityList !is null && QualityList.length() == 0) {
 		array<int> qns = {10000, 400, 250, 150, 80};
 		array<string> qnames = {"原画", "蓝光", "超清", "高清", "流畅"};
 		for (uint i2 = 0; i2 < qns.length(); i2++) {
-			dictionary qualityitem;
-			qualityitem["url"] = url;
-			qualityitem["quality"] = qnames[i2];
-			qualityitem["qualityDetail"] = qualityitem["quality"];
-			qualityitem["itag"] = i2;
-			QualityList.insertLast(qualityitem);
+			dictionary qitem; qitem["url"] = url; qitem["quality"] = qnames[i2];
+			qitem["qualityDetail"] = qitem["quality"]; qitem["itag"] = i2;
+			QualityList.insertLast(qitem);
 		}
 	}
 	return url;
